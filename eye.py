@@ -21,6 +21,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Initialize session state for patient history
+if 'patient_history' not in st.session_state:
+    st.session_state.patient_history = []
+
 # Minimal CSS with good contrast and older Streamlit compatibility
 def load_css():
     st.markdown("""
@@ -254,6 +258,21 @@ def load_css():
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
     }
     
+    /* Patient History Card */
+    .patient-card {
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+    
+    .patient-card h4 {
+        margin: 0 0 0.5rem 0;
+        color: #1f2937;
+    }
+    
     /* Responsive Design */
     @media (max-width: 768px) {
         .header-card h1 { font-size: 2rem; }
@@ -263,6 +282,37 @@ def load_css():
     }
     </style>
     """, unsafe_allow_html=True)
+
+# Function to add analysis to patient history
+def add_to_patient_history(patient_id, diagnosis, confidence, image_name):
+    """Add a new analysis result to patient history"""
+    new_record = {
+        'Date': datetime.now().strftime('%Y-%m-%d %H:%M'),
+        'Patient ID': patient_id,
+        'Image Name': image_name,
+        'Diagnosis': diagnosis,
+        'Confidence': round(confidence * 100, 1)
+    }
+    st.session_state.patient_history.append(new_record)
+
+# Function to get patient history
+def get_patient_history():
+    """Return patient history as DataFrame"""
+    if st.session_state.patient_history:
+        return pd.DataFrame(st.session_state.patient_history)
+    else:
+        # Return empty DataFrame with proper columns
+        return pd.DataFrame(columns=['Date', 'Patient ID', 'Image Name', 'Diagnosis', 'Confidence'])
+
+# Function to search patient by ID
+def search_patient_history(patient_id):
+    """Search patient history by patient ID"""
+    if st.session_state.patient_history:
+        df = pd.DataFrame(st.session_state.patient_history)
+        filtered_df = df[df['Patient ID'].str.contains(patient_id, case=False, na=False)]
+        return filtered_df
+    else:
+        return pd.DataFrame(columns=['Date', 'Patient ID', 'Image Name', 'Diagnosis', 'Confidence'])
 
 # Model prediction function
 def model_prediction(test_image_path):
@@ -377,19 +427,38 @@ def calculate_risk_assessment(prediction_index, confidence_scores):
     </div>
     """, unsafe_allow_html=True)
 
-# Patient history
+# Patient history display
 def display_patient_history():
-    st.markdown("### 📋 Recent Analysis History")
+    st.markdown("### 📋 Analysis History")
     
-    history_data = {
-        'Date': [(datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(5)],
-        'Patient ID': ['P001', 'P002', 'P003', 'P004', 'P005'],
-        'Diagnosis': ['Normal', 'CNV', 'DME', 'Normal', 'Drusen'],
-        'Confidence': [95.2, 87.3, 92.1, 98.5, 89.7]
-    }
+    df_history = get_patient_history()
     
-    df_history = pd.DataFrame(history_data)
-    st.dataframe(df_history, use_container_width=True)
+    if not df_history.empty:
+        # Display statistics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Analyses", len(df_history))
+        with col2:
+            unique_patients = df_history['Patient ID'].nunique() if len(df_history) > 0 else 0
+            st.metric("Unique Patients", unique_patients)
+        with col3:
+            if len(df_history) > 0:
+                avg_confidence = df_history['Confidence'].mean()
+                st.metric("Avg Confidence", f"{avg_confidence:.1f}%")
+        
+        # Display history table
+        st.dataframe(df_history.sort_values('Date', ascending=False), use_container_width=True)
+        
+        # Download option
+        csv = df_history.to_csv(index=False)
+        st.download_button(
+            label="📥 Download History as CSV",
+            data=csv,
+            file_name=f"patient_history_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("No analysis history found. Start by analyzing OCT images in the Disease Detection section.")
 
 # Load CSS
 load_css()
@@ -414,7 +483,8 @@ app_mode = st.sidebar.selectbox("Navigation", [
 with st.sidebar:
     st.markdown("---")
     st.markdown("### Platform Statistics")
-    st.metric("Total Scans", "84,495", delta="1,245")
+    total_analyses = len(st.session_state.patient_history)
+    st.metric("Total Scans", f"{84495 + total_analyses:,}", delta=f"+{total_analyses}")
     st.metric("Accuracy", "93.2%", delta="0.3%")
     st.metric("Diseases", "4 Types")
 
@@ -506,10 +576,12 @@ elif app_mode == "Analytics":
     # Key metrics
     col1, col2, col3, col4 = st.columns(4)
     
+    total_analyses = len(st.session_state.patient_history)
+    
     with col1:
-        st.markdown("""
+        st.markdown(f"""
         <div class="metric-card">
-            <h2>84,495</h2>
+            <h2>{84495 + total_analyses:,}</h2>
             <p>OCT Images</p>
         </div>
         """, unsafe_allow_html=True)
@@ -548,13 +620,46 @@ elif app_mode == "Disease Detection":
     </div>
     """, unsafe_allow_html=True)
     
-    # Upload section
+    # Patient ID input
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        patient_id = st.text_input("👤 Patient ID", placeholder="Enter patient ID (e.g., P001)")
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)  # Add spacing
+        auto_generate = st.button("🔄 Auto Generate")
+    
+    if auto_generate:
+        # Generate automatic patient ID
+        import random
+        patient_id = f"P{random.randint(1000, 9999)}"
+        st.success(f"Generated Patient ID: {patient_id}")
+    
+    # Upload section with additional guidance
     st.markdown("""
     <div class="upload-area">
         <h3>📁 Upload OCT Image</h3>
         <p>Supported: JPG, JPEG, PNG</p>
+        <p style="font-size: 0.9em; color: #64748b; margin-top: 0.5rem;">
+            ⚠️ Only upload OCT (Optical Coherence Tomography) retinal scans for accurate diagnosis
+        </p>
     </div>
     """, unsafe_allow_html=True)
+    
+    # Add example of what OCT images should look like
+    with st.expander("ℹ️ What are valid OCT images?"):
+        st.markdown("""
+        **Valid OCT Images should have:**
+        - Grayscale or monochrome appearance
+        - Horizontal layered structures (retinal layers)
+        - Cross-sectional view of retinal tissue
+        - Medical imaging format from OCT equipment
+        
+        **Invalid Images (will be rejected):**
+        - Regular color photographs
+        - Fundus camera images
+        - Non-medical images
+        - Other medical scans (X-ray, MRI, CT)
+        """)
     
     test_image = st.file_uploader("Choose file", type=['jpg', 'jpeg', 'png'])
     
@@ -588,48 +693,63 @@ elif app_mode == "Disease Detection":
     
     # Analysis
     if st.button("🔍 Analyze OCT Scan") and test_image is not None:
-        with st.spinner("Analyzing..."):
-            try:
-                result_index, confidence_scores = model_prediction(temp_file_path)
-                class_names = ['CNV', 'DME', 'DRUSEN', 'NORMAL']
-                predicted_class = class_names[result_index]
-                
-                # Result
-                result_classes = ["result-cnv", "result-dme", "result-drusen", "result-normal"]
-                
-                st.markdown(f"""
-                <div class="prediction-result {result_classes[result_index]}">
-                    Diagnosis: {predicted_class}<br>
-                    Confidence: {confidence_scores[result_index]*100:.1f}%
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Confidence scores
-                display_confidence_scores(confidence_scores, class_names)
-                
-                # Risk assessment
-                calculate_risk_assessment(result_index, confidence_scores)
-                
-                # Medical info
-                with st.expander("📚 Medical Information"):
-                    if result_index == 0:
-                        st.markdown("### CNV (Choroidal Neovascularization)")
-                        st.markdown(cnv)
-                    elif result_index == 1:
-                        st.markdown("### DME (Diabetic Macular Edema)")
-                        st.markdown(dme)
-                    elif result_index == 2:
-                        st.markdown("### Drusen (Early AMD)")
-                        st.markdown(drusen)
-                    else:
-                        st.markdown("### Normal Retina")
-                        st.markdown(normal)
-                
-            except Exception as e:
-                st.error(f"Analysis failed: {str(e)}")
-            finally:
-                if os.path.exists(temp_file_path):
-                    os.remove(temp_file_path)
+        if not patient_id:
+            st.error("Please enter a Patient ID before analyzing.")
+        else:
+            with st.spinner("Analyzing..."):
+                try:
+                    result_index, confidence_scores = model_prediction(temp_file_path)
+                    class_names = ['CNV', 'DME', 'DRUSEN', 'NORMAL']
+                    predicted_class = class_names[result_index]
+                    
+                    # Add to patient history
+                    add_to_patient_history(
+                        patient_id=patient_id,
+                        diagnosis=predicted_class,
+                        confidence=confidence_scores[result_index],
+                        image_name=test_image.name
+                    )
+                    
+                    # Result
+                    result_classes = ["result-cnv", "result-dme", "result-drusen", "result-normal"]
+                    
+                    st.markdown(f"""
+                    <div class="prediction-result {result_classes[result_index]}">
+                        Diagnosis: {predicted_class}<br>
+                        Confidence: {confidence_scores[result_index]*100:.1f}%<br>
+                        Patient: {patient_id}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Success message
+                    st.success(f"✅ Analysis completed and saved to patient history for {patient_id}")
+                    
+                    # Confidence scores
+                    display_confidence_scores(confidence_scores, class_names)
+                    
+                    # Risk assessment
+                    calculate_risk_assessment(result_index, confidence_scores)
+                    
+                    # Medical info
+                    with st.expander("📚 Medical Information"):
+                        if result_index == 0:
+                            st.markdown("### CNV (Choroidal Neovascularization)")
+                            st.markdown(cnv)
+                        elif result_index == 1:
+                            st.markdown("### DME (Diabetic Macular Edema)")
+                            st.markdown(dme)
+                        elif result_index == 2:
+                            st.markdown("### Drusen (Early AMD)")
+                            st.markdown(drusen)
+                        else:
+                            st.markdown("### Normal Retina")
+                            st.markdown(normal)
+                    
+                except Exception as e:
+                    st.error(f"Analysis failed: {str(e)}")
+                finally:
+                    if os.path.exists(temp_file_path):
+                        os.remove(temp_file_path)
 
 elif app_mode == "Patient History":
     st.markdown("""
@@ -639,13 +759,34 @@ elif app_mode == "Patient History":
     </div>
     """, unsafe_allow_html=True)
     
+    # Patient search
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        search_patient_id = st.text_input("🔍 Search by Patient ID", placeholder="Enter Patient ID to search...")
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        clear_history = st.button("🗑️ Clear All History")
+    
+    if clear_history:
+        if st.session_state.patient_history:
+            st.session_state.patient_history = []
+            st.success("✅ Patient history cleared successfully!")
+            st.experimental_rerun()
+        else:
+            st.info("No history to clear.")
+    
+    # Search functionality
+    if search_patient_id:
+        filtered_df = search_patient_history(search_patient_id)
+        if not filtered_df.empty:
+            st.success(f"Found {len(filtered_df)} record(s) for Patient ID containing: {search_patient_id}")
+            st.dataframe(filtered_df.sort_values('Date', ascending=False), use_container_width=True)
+        else:
+            st.warning(f"No records found for Patient ID containing: {search_patient_id}")
+    
+    # Display all patient history
+    st.markdown("---")
     display_patient_history()
-    
-    st.markdown("### 🔍 Patient Search")
-    patient_id = st.text_input("Enter Patient ID:")
-    
-    if patient_id:
-        st.success(f"Records for Patient ID: {patient_id}")
 
 else:  # About
     st.markdown("""
@@ -664,19 +805,6 @@ else:  # About
         <ul>
             <li><strong>Shiley Eye Institute</strong> - UC San Diego</li>
             <li><strong>California Retinal Research Foundation</strong></li>
-            <li><strong>Shanghai First People's Hospital</strong></li>
-            <li><strong>Beijing Tongren Eye Center</strong></li>
-        </ul>
-        
-        <h3>Quality Assurance</h3>
-        <p>Each image underwent multi-tier validation by trained medical professionals and senior retinal specialists.</p>
-        
-        <h3>Technical Specifications</h3>
-        <ul>
-            <li><strong>Format:</strong> High-resolution JPEG</li>
-            <li><strong>Period:</strong> July 2013 - March 2017</li>
-            <li><strong>Equipment:</strong> Spectralis OCT (Heidelberg)</li>
-            <li><strong>Validation:</strong> 993 dual-graded scans</li>
-        </ul>
+            <li><strong>Shanghai First People's Hospital</strong></li></ul>
     </div>
-    """, unsafe_allow_html=True)
+     """, unsafe_allow_html=True)
